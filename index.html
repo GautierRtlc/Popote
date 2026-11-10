@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Popote : votre bibliothèque de recettes, vos menus de la semaine et votre liste de courses, générés en un clic.">
+  <title>Popote — Recettes, menus & courses sans prise de tête</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥘</text></svg>">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="app" id="app">
+    <aside class="sidebar">
+      <div class="logo">
+        <span class="logo-mark" aria-hidden="true">🥘</span>
+        <span class="logo-text">Popote</span>
+      </div>
+      <p class="logo-tag">Vos recettes, vos menus,<br>vos courses. Sans y penser.</p>
+
+      <nav class="nav" aria-label="Navigation principale">
+        <button class="nav-item is-active" type="button" data-view="recipes">
+          <span class="nav-emoji" aria-hidden="true">📖</span>
+          <span>Recettes</span>
+          <span class="nav-count" id="nav-count-recipes"></span>
+        </button>
+        <button class="nav-item" type="button" data-view="menus">
+          <span class="nav-emoji" aria-hidden="true">🗓️</span>
+          <span>Menus</span>
+        </button>
+        <button class="nav-item" type="button" data-view="courses">
+          <span class="nav-emoji" aria-hidden="true">🛒</span>
+          <span>Courses</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-foot">
+        <div class="tip-card">
+          <span aria-hidden="true">💡</span>
+          <p>Épinglez un repas avec le cadenas avant de régénérer : il restera dans votre menu.</p>
+        </div>
+        <button class="nav-item nav-item-ghost" type="button" data-action="open-settings">
+          <span class="nav-emoji" aria-hidden="true">⚙️</span>
+          <span>Réglages &amp; données</span>
+        </button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="mobile-head">
+        <div class="logo logo-small">
+          <span class="logo-mark" aria-hidden="true">🥘</span>
+          <span class="logo-text">Popote</span>
+        </div>
+        <button class="icon-btn icon-btn-lg" type="button" data-action="open-settings" aria-label="Réglages et données">⚙️</button>
+      </div>
+
+      <section class="view" id="view-recipes">
+        <header class="view-head">
+          <div>
+            <p class="eyebrow">Ma cuisine</p>
+            <h1>Mes recettes</h1>
+            <p class="subtitle" id="recipes-count">Chargement…</p>
+          </div>
+          <button class="btn btn-primary" type="button" data-action="new-recipe">
+            <span aria-hidden="true">＋</span> Nouvelle recette
+          </button>
+        </header>
+
+        <div class="toolbar">
+          <label class="search" for="recipe-search">
+            <span class="search-icon" aria-hidden="true">🔎</span>
+            <input id="recipe-search" type="search" placeholder="Rechercher une recette, un ingrédient…" autocomplete="off">
+          </label>
+          <div class="chips" id="recipe-filters" role="group" aria-label="Filtrer les recettes">
+            <button class="chip is-active" type="button" data-filter="all">Toutes</button>
+            <button class="chip" type="button" data-filter="favorite">♥ Favoris</button>
+            <button class="chip" type="button" data-filter="petit-dej">☕ Petit-déj</button>
+            <button class="chip" type="button" data-filter="dejeuner">🍽️ Déjeuner</button>
+            <button class="chip" type="button" data-filter="diner">🌙 Dîner</button>
+            <button class="chip" type="button" data-filter="snack">🍎 Snack</button>
+          </div>
+        </div>
+
+        <div class="recipe-grid" id="recipe-grid"></div>
+      </section>
+
+      <section class="view" id="view-menus" hidden>
+        <header class="view-head">
+          <div>
+            <p class="eyebrow">Mon planning</p>
+            <h1>Menus de la semaine</h1>
+            <p class="subtitle">Dites-nous le rythme, on pioche dans vos recettes.</p>
+          </div>
+          <div class="head-actions" id="plan-head-actions"></div>
+        </header>
+
+        <div id="plan-setup"></div>
+        <div id="plan-content"></div>
+      </section>
+
+      <section class="view" id="view-courses" hidden>
+        <header class="view-head">
+          <div>
+            <p class="eyebrow">Zéro oubli</p>
+            <h1>Liste de courses</h1>
+            <p class="subtitle" id="courses-subtitle">Elle se remplit automatiquement à partir de vos menus.</p>
+          </div>
+          <div class="head-actions" id="courses-actions"></div>
+        </header>
+
+        <div id="courses-content"></div>
+      </section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="Navigation mobile">
+      <button class="nav-item is-active" type="button" data-view="recipes">
+        <span class="nav-emoji" aria-hidden="true">📖</span>
+        <span>Recettes</span>
+      </button>
+      <button class="nav-item" type="button" data-view="menus">
+        <span class="nav-emoji" aria-hidden="true">🗓️</span>
+        <span>Menus</span>
+      </button>
+      <button class="nav-item" type="button" data-view="courses">
+        <span class="nav-emoji" aria-hidden="true">🛒</span>
+        <span>Courses</span>
+      </button>
+    </nav>
+  </div>
+
+  <div id="modal-root"></div>
+  <div id="toast-root" aria-live="polite"></div>
+
+  <noscript>
+    <p class="noscript">Popote a besoin de JavaScript pour fonctionner. Activez-le dans votre navigateur.</p>
+  </noscript>
+
+  <script src="js/data.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/generator.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
