@@ -2,7 +2,7 @@
 
 **Vos recettes, vos menus, vos courses. Sans y penser.**
 
-Popote est une petite application web qui rassemble vos recettes, génère des menus pour les jours à venir et en déduit automatiquement une liste de courses ajustée au nombre de personnes.
+Popote est une petite application web qui rassemble vos recettes, compose **un menu hebdomadaire par convive** selon son envie, puis en déduit automatiquement une liste de courses additionnant toutes les portions.
 
 Aucune installation, aucun compte, aucun serveur : tout fonctionne dans le navigateur et vos données restent sur votre appareil.
 
@@ -18,16 +18,22 @@ Aucune installation, aucun compte, aucun serveur : tout fonctionne dans le navig
 - Fiche recette avec **quantités recalculées** pour le nombre de portions souhaité.
 
 ### Menus
-- Génération d'un planning de **1 à 14 jours** pour **1 à 12 personnes**.
+- Génération d'un planning de **1 à 14 jours** pour **1 à 12 convives**.
+- **Un menu personnalisé par personne** : chaque convive a un prénom et une envie principale (`healthy`, `léger`, `réconfortant`, `rapide`, etc.). Camille peut ainsi suivre un menu healthy toute la semaine, Léo un menu léger et Sam un menu réconfortant.
+- Les convives sont **mémorisés** : prénoms et envies préremplissent le formulaire au prochain planning, même après avoir vidé le menu.
+- Chaque repas du planning est décliné en **une variante par convive**. Un même créneau peut donc proposer trois plats différents.
+- Le style d'une personne est une préférence forte : le générateur pioche en priorité dans les recettes qui portent ce tag, avec repli si aucune recette ne correspond.
+- Filtre d'affichage **« Tout le monde »** ou par personne pour lire un menu individuel.
 - Créneaux disponibles : petit-déj, déjeuner, dîner, snack.
-- Critères d'envie (`rapide`, `healthy`, `réconfortant`, `végétarien`, `chaud`, `froid`, `généreux`, `léger`, `sucré`) et exclusions.
-- Les favoris sont privilégiés, avec pénalités pour éviter les répétitions.
-- **Repas épinglés** 🔒 : conservés lors d'une régénération.
-- Remplacement 🔁, retrait ✕ ou choix manuel d'une recette pour chaque créneau.
+- Critères d'envie communs (`rapide`, `healthy`, `réconfortant`, `végétarien`, `chaud`, `froid`, `généreux`, `léger`, `sucré`) et exclusions.
+- Les favoris sont privilégiés, avec pénalités pour éviter les répétitions. Deux convives n'ont pas le même plat sur le même créneau quand des alternatives existent.
+- **Repas épinglés** 🔒 par personne : conservés lors d'une régénération.
+- Remplacement 🔁, retrait ✕ ou choix manuel d'une recette **pour chaque personne**.
 - Repli automatique entre déjeuner et dîner si une catégorie manque.
 
 ### Liste de courses
-- Générée à partir du planning et **ajustée au nombre de personnes**.
+- Générée à partir de toutes les variantes du planning et **ajustée au nombre de portions** (une portion par personne et par repas).
+- Les ingrédients de tous les menus individuels sont additionnés.
 - Ingrédients regroupés par rayon (fruits & légumes, viandes & poissons, produits laitiers, boulangerie, épicerie, surgelés, autre).
 - Agrégation des ingrédients identiques et conversion des unités (g → kg, ml → l, cl → ml).
 - Cases à cocher persistantes, progression et bouton « Tout décocher ».
@@ -116,20 +122,37 @@ Structure générale :
       "createdAt": 1700000000000
     }
   ],
+  "profiles": [
+    { "id": "p-1", "name": "Camille", "tags": ["healthy"] },
+    { "id": "p-2", "name": "Léo", "tags": ["leger"] },
+    { "id": "p-3", "name": "Sam", "tags": ["reconfortant"] }
+  ],
   "plan": {
     "startDate": "2026-11-10",
+    "profiles": [
+      { "id": "p-1", "name": "Camille", "tags": ["healthy"] },
+      { "id": "p-2", "name": "Léo", "tags": ["leger"] },
+      { "id": "p-3", "name": "Sam", "tags": ["reconfortant"] }
+    ],
     "days": [
       {
         "date": "2026-11-10",
         "meals": [
-          { "slot": "dejeuner", "recipeId": "seed-porridge", "locked": false }
+          {
+            "slot": "dejeuner",
+            "variants": [
+              { "profileId": "p-1", "recipeId": "seed-salade-lentilles", "locked": false },
+              { "profileId": "p-2", "recipeId": "seed-soupe-courge", "locked": false },
+              { "profileId": "p-3", "recipeId": "seed-carbonara", "locked": false }
+            ]
+          }
         ]
       }
     ],
     "settings": {
       "startDate": "2026-11-10",
       "days": 7,
-      "persons": 2,
+      "persons": 3,
       "meals": ["dejeuner", "diner"],
       "favor": ["healthy"],
       "avoid": ["gras"]
@@ -145,10 +168,12 @@ Structure générale :
 
 Bon à savoir :
 - Les données sont **locales au navigateur et à l'appareil** : pas de synchronisation automatique entre appareils. Utilisez l'export JSON pour les transférer.
-- Effacer les données du site dans le navigateur efface aussi les recettes et menus.
+- Les **convives** (prénom + envie) sont enregistrés à part : ils sont restaurés au rechargement et restent disponibles même après avoir vidé le planning.
+- Effacer les données du site dans le navigateur efface aussi les recettes, convives et menus.
 - La navigation privée peut supprimer les données à la fermeture.
 - Un seul planning actif est conservé à la fois.
 - Les limites actuelles sont de 14 jours et 12 personnes.
+- Un ancien planning (un seul plat partagé, sans convives) est **migré automatiquement** : chaque personne reçoit la même recette, puis les menus peuvent être régénérés individuellement.
 
 ---
 
@@ -158,7 +183,7 @@ Bon à savoir :
 - Palette chaleureuse crème, vert forêt et terracotta.
 - Navigation par onglets, états vides explicites et messages de confirmation.
 - Contrastes de couleurs vérifiés, structure de titres cohérente, libellés ARIA sur les éléments interactifs.
-- Audit Lighthouse : **100 en accessibilité, bonnes pratiques et SEO** sur les vues Recettes, Menus et Courses.
+- Audit Lighthouse : **100 en accessibilité, bonnes pratiques et SEO** sur les vues Recettes, Menus et Courses, le formulaire des convives et les modales (recette et choix manuel).
 
 ---
 

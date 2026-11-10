@@ -112,6 +112,7 @@ const Store = (() => {
     return {
       version: 1,
       recipes: cloneSeedRecipes(),
+      profiles: defaultProfiles(2),
       plan: null,
       shopping: { checked: {} }
     };
@@ -148,31 +149,96 @@ const Store = (() => {
     };
   }
 
-  function normalizePlan(plan) {
+  function defaultProfiles(count) {
+    const total = Math.min(12, Math.max(1, Math.round(Number(count) || 2)));
+    return Array.from({ length: total }, (_, index) => ({
+      id: uid("p"),
+      name: "Personne " + (index + 1),
+      tags: []
+    }));
+  }
+
+  function normalizeProfilesList(list, fallbackCount) {
+    const source = Array.isArray(list) ? list : [];
+    const count = Math.min(12, source.length || Math.max(1, Math.round(Number(fallbackCount) || 2)));
+    const profiles = [];
+    const usedIds = new Set();
+
+    for (let index = 0; index < count; index += 1) {
+      const sourceProfile = source[index] || {};
+      const name = String(sourceProfile.name || "").trim().slice(0, 24);
+      let id = sourceProfile.id || uid("p");
+      if (usedIds.has(id)) id = uid("p");
+      usedIds.add(id);
+      profiles.push({
+        id,
+        name: name || "Personne " + (index + 1),
+        tags: Array.isArray(sourceProfile.tags)
+          ? sourceProfile.tags.filter((t) => TAG_BY_ID[t])
+          : []
+      });
+    }
+
+    return profiles;
+  }
+
+  function normalizePlan(plan, fallbackProfiles) {
     if (!plan || typeof plan !== "object" || !Array.isArray(plan.days)) return null;
     const settings = plan.settings || {};
+    const rawProfiles = Array.isArray(plan.profiles) && plan.profiles.length
+      ? plan.profiles
+      : Array.isArray(settings.profiles) && settings.profiles.length
+        ? settings.profiles
+        : Array.isArray(fallbackProfiles) && fallbackProfiles.length
+          ? fallbackProfiles
+          : null;
+    const profiles = rawProfiles
+      ? normalizeProfilesList(rawProfiles)
+      : defaultProfiles(settings.persons || 2);
     const meals = Array.isArray(settings.meals) && settings.meals.length
       ? settings.meals.filter((m) => MEAL_BY_ID[m])
       : ["dejeuner", "diner"];
 
     return {
       startDate: /^\d{4}-\d{2}-\d{2}$/.test(settings.startDate || "") ? settings.startDate : todayISO(),
+      profiles,
       days: plan.days
         .filter((day) => day && Array.isArray(day.meals))
         .map((day) => ({
           date: /^\d{4}-\d{2}-\d{2}$/.test(day.date || "") ? day.date : todayISO(),
           meals: day.meals
             .filter((meal) => meal && MEAL_BY_ID[meal.slot])
-            .map((meal) => ({
-              slot: meal.slot,
-              recipeId: meal.recipeId || null,
-              locked: Boolean(meal.locked)
-            }))
+            .map((meal) => {
+              const oldVariants = Array.isArray(meal.variants) ? meal.variants : null;
+              return {
+                slot: meal.slot,
+                variants: profiles.map((profile) => {
+                  const oldVariant = oldVariants
+                    ? oldVariants.find((variant) => variant && variant.profileId === profile.id)
+                    : null;
+
+                  // Ancien format : un seul plat partagé par tout le monde.
+                  if (!oldVariants) {
+                    return {
+                      profileId: profile.id,
+                      recipeId: meal.recipeId || null,
+                      locked: Boolean(meal.locked && meal.recipeId)
+                    };
+                  }
+
+                  return {
+                    profileId: profile.id,
+                    recipeId: oldVariant ? oldVariant.recipeId || null : null,
+                    locked: Boolean(oldVariant && oldVariant.locked && oldVariant.recipeId)
+                  };
+                })
+              };
+            })
         })),
       settings: {
         startDate: /^\d{4}-\d{2}-\d{2}$/.test(settings.startDate || "") ? settings.startDate : todayISO(),
         days: clamp(settings.days || plan.days.length || 5, 1, 14),
-        persons: clamp(settings.persons || 2, 1, 12),
+        persons: profiles.length,
         meals,
         favor: Array.isArray(settings.favor) ? settings.favor.filter((t) => TAG_BY_ID[t]) : [],
         avoid: Array.isArray(settings.avoid) ? settings.avoid.filter((t) => TAG_BY_ID[t]) : []
@@ -201,10 +267,16 @@ const Store = (() => {
         persist();
         return;
       }
+      const plan = normalizePlan(parsed.plan, parsed.profiles);
+      const storedProfiles = Array.isArray(parsed.profiles) && parsed.profiles.length
+        ? parsed.profiles
+        : (plan ? plan.profiles : null);
+
       state = {
         version: 1,
         recipes: parsed.recipes.map(normalizeRecipe),
-        plan: normalizePlan(parsed.plan),
+        profiles: normalizeProfilesList(storedProfiles),
+        plan,
         shopping: parsed.shopping && typeof parsed.shopping.checked === "object"
           ? { checked: parsed.shopping.checked }
           : { checked: {} }
@@ -246,10 +318,12 @@ const Store = (() => {
     if (state.plan) {
       state.plan.days.forEach((day) => {
         day.meals.forEach((meal) => {
-          if (meal.recipeId === id) {
-            meal.recipeId = null;
-            meal.locked = false;
-          }
+          (meal.variants || []).forEach((variant) => {
+            if (variant.recipeId === id) {
+              variant.recipeId = null;
+              variant.locked = false;
+            }
+          });
         });
       });
     }
@@ -263,8 +337,17 @@ const Store = (() => {
     persist();
   }
 
+  function setProfiles(profiles) {
+    state.profiles = normalizeProfilesList(profiles);
+    persist();
+    return state.profiles;
+  }
+
   function setPlan(plan) {
     state.plan = plan;
+    if (plan && Array.isArray(plan.profiles) && plan.profiles.length) {
+      state.profiles = normalizeProfilesList(plan.profiles);
+    }
     state.shopping.checked = {};
     persist();
   }
@@ -296,10 +379,20 @@ const Store = (() => {
     if (!parsed || !Array.isArray(parsed.recipes)) {
       throw new Error("Fichier invalide : recettes manquantes.");
     }
+
+    // Une sauvegarde ancienne peut ne contenir aucun convive : on garde alors
+    // ceux déjà enregistrés dans ce navigateur au lieu de les effacer.
+    const previousProfiles = Array.isArray(state.profiles) ? state.profiles : null;
+    const plan = normalizePlan(parsed.plan, parsed.profiles || previousProfiles);
+    const storedProfiles = Array.isArray(parsed.profiles) && parsed.profiles.length
+      ? parsed.profiles
+      : (plan ? plan.profiles : previousProfiles);
+
     state = {
       version: 1,
       recipes: parsed.recipes.map(normalizeRecipe),
-      plan: normalizePlan(parsed.plan),
+      profiles: normalizeProfilesList(storedProfiles),
+      plan,
       shopping: parsed.shopping && typeof parsed.shopping.checked === "object"
         ? { checked: parsed.shopping.checked }
         : { checked: {} }
@@ -316,12 +409,14 @@ const Store = (() => {
     load,
     get state() { return state; },
     get recipes() { return state.recipes; },
+    get profiles() { return state.profiles; },
     save: persist,
     uid,
     getRecipe,
     upsertRecipe,
     deleteRecipe,
     toggleFavorite,
+    setProfiles,
     setPlan,
     clearPlan,
     restoreSeeds,

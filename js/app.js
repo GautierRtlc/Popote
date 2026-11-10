@@ -6,10 +6,30 @@ const UI = {
   view: "recipes",
   search: "",
   filter: "all",
-  setupOpen: false
+  setupOpen: false,
+  menuProfile: "all"
 };
 
 const EMOJIS = ["🍳", "🥗", "🍝", "🥘", "🍲", "🍛", "🌯", "🥪", "🥙", "🥣", "🥞", "🍰", "🍎", "🍗", "🐟", "🥑", "🍫", "🫓"];
+
+const PROFILE_COLORS = ["#3c6b4e", "#b05429", "#6a5a9e", "#2f7d8c", "#9a6b1f", "#8d4f6a", "#5e7a2f", "#8a4b3a", "#4f6f9e", "#7a6b3f", "#a34f7a", "#3f7a68"];
+
+function profileColor(index) {
+  return PROFILE_COLORS[index % PROFILE_COLORS.length];
+}
+
+function profileStyle(profile) {
+  return profile && Array.isArray(profile.tags) && profile.tags[0] ? TAG_BY_ID[profile.tags[0]] : null;
+}
+
+function defaultProfiles(count) {
+  const total = Math.round(clamp(count || 2, 1, 12));
+  return Array.from({ length: total }, (_, index) => ({
+    id: Store.uid("p"),
+    name: "Personne " + (index + 1),
+    tags: []
+  }));
+}
 
 const HEART_SVG_ON = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 21s-7.5-4.7-9.5-9A5.4 5.4 0 0 1 12 6.5 5.4 5.4 0 0 1 21.5 12c-2 4.3-9.5 9-9.5 9z" fill="currentColor"/></svg>';
 const HEART_SVG_OFF = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 20.3s-7-4.4-8.9-8.5A5 5 0 0 1 12 7.1a5 5 0 0 1 8.9 4.7c-1.9 4.1-8.9 8.5-8.9 8.5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>';
@@ -220,14 +240,24 @@ function recipeCardHTML(recipe) {
 
 function currentSettings() {
   const plan = Store.state.plan;
-  if (plan) return plan.settings;
+  if (plan) {
+    return {
+      ...plan.settings,
+      profiles: plan.profiles.map((profile) => ({ ...profile, tags: profile.tags.slice() }))
+    };
+  }
+  const savedProfiles = Array.isArray(Store.state.profiles) && Store.state.profiles.length
+    ? Store.state.profiles
+    : defaultProfiles(2);
+
   return {
     startDate: todayISO(),
     days: 5,
-    persons: 2,
+    persons: savedProfiles.length,
     meals: ["dejeuner", "diner"],
     favor: [],
-    avoid: []
+    avoid: [],
+    profiles: savedProfiles.map((profile) => ({ ...profile, tags: profile.tags.slice() }))
   };
 }
 
@@ -237,6 +267,10 @@ function renderMenus() {
   head.innerHTML = plan
     ? '<button class="btn btn-primary" type="button" data-action="goto-courses">🛒 Liste de courses</button>'
     : "";
+
+  if (plan && UI.menuProfile !== "all" && !plan.profiles.some((profile) => profile.id === UI.menuProfile)) {
+    UI.menuProfile = "all";
+  }
 
   const showSetup = !plan || UI.setupOpen;
   const setupEl = document.getElementById("plan-setup");
@@ -254,29 +288,101 @@ function setupHTML(settings, hasPlan) {
   const tagToggle = (tag, name) =>
     '<label class="tag-toggle' + (name === "avoid" ? " avoid" : "") + '"><input type="checkbox" name="' + name + '" value="' + tag.id + '"' + (settings[name].includes(tag.id) ? " checked" : "") + "><span>" + tag.emoji + " " + tag.label + "</span></label>";
 
+  const profiles = settings.profiles && settings.profiles.length ? settings.profiles : defaultProfiles(2);
+
   return (
     '<form class="setup-card card" id="plan-form" novalidate>' +
       '<div class="setup-head">' +
         "<div>" +
           "<h2>Composez votre planning</h2>" +
-          "<p>Choisissez le rythme et vos envies : on pioche dans vos " + Store.recipes.length + " recettes.</p>" +
+          "<p>Un menu par personne, selon son envie : on pioche dans vos " + Store.recipes.length + " recettes.</p>" +
         "</div>" +
         (hasPlan ? '<button type="button" class="btn btn-ghost btn-sm" data-action="toggle-setup">Fermer</button>' : "") +
       "</div>" +
       '<div class="setup-grid">' +
         '<label class="field"><span>Date de début</span><input type="date" name="startDate" value="' + esc(settings.startDate) + '" required></label>' +
         '<label class="field"><span>Nombre de jours</span><input type="number" name="days" min="1" max="14" value="' + settings.days + '" required></label>' +
-        '<label class="field"><span>Personnes</span><input type="number" name="persons" min="1" max="12" value="' + settings.persons + '" required></label>' +
+      "</div>" +
+      '<div class="setup-section">' +
+        '<div class="setup-people-head">' +
+          '<span class="setup-label" id="people-label">Les convives <small>un menu par personne</small></span>' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-action="add-person">＋ Ajouter une personne</button>' +
+        "</div>" +
+        '<div class="people-editor" id="people-editor" role="group" aria-labelledby="people-label">' +
+          profiles.map((profile, index) => personRowHTML(profile, index)).join("") +
+        "</div>" +
+        '<p class="hint">Chaque personne reçoit son propre menu selon son envie principale. La liste de courses additionne toutes les portions.</p>' +
       "</div>" +
       '<div class="setup-section"><span class="setup-label">Repas à planifier</span><div class="toggle-row">' + MEAL_SLOTS.map(mealToggle).join("") + "</div></div>" +
-      '<div class="setup-section"><span class="setup-label">Envie de… <small>facultatif</small></span><div class="toggle-row">' + TAGS.map((tag) => tagToggle(tag, "favor")).join("") + "</div></div>" +
+      '<div class="setup-section"><span class="setup-label">Envies communes… <small>facultatif</small></span><div class="toggle-row">' + TAGS.map((tag) => tagToggle(tag, "favor")).join("") + "</div></div>" +
       '<div class="setup-section"><span class="setup-label">À éviter… <small>facultatif</small></span><div class="toggle-row">' + TAGS.map((tag) => tagToggle(tag, "avoid")).join("") + "</div></div>" +
       '<div class="setup-foot">' +
-        '<p class="hint">💡 Après génération, remplacez ou épinglez chaque repas selon vos envies.</p>' +
+        '<p class="hint">💡 Une personne peut avoir un menu healthy, une autre léger, une autre réconfortant…</p>' +
         '<button type="submit" class="btn btn-primary">Générer mes menus ✨</button>' +
       "</div>" +
     "</form>"
   );
+}
+
+function personRowHTML(profile, index) {
+  const selected = profile.tags && profile.tags[0] ? profile.tags[0] : "";
+  const options = TAGS.map((tag) =>
+    '<option value="' + tag.id + '"' + (tag.id === selected ? " selected" : "") + ">" + tag.emoji + " " + tag.label + "</option>"
+  ).join("");
+
+  return (
+    '<div class="person-row" data-person-row>' +
+      '<input type="hidden" name="personId" value="' + esc(profile.id || "") + '">' +
+      '<input type="text" name="personName" value="' + esc(profile.name || "") + '" maxlength="24" placeholder="Prénom" aria-label="Nom de la personne ' + (index + 1) + '">' +
+      '<select name="personStyle" aria-label="Envie de la personne ' + (index + 1) + '">' +
+        '<option value="">Sans préférence</option>' + options +
+      "</select>" +
+      '<button type="button" class="icon-btn" data-action="remove-person" aria-label="Supprimer la personne ' + (index + 1) + '" title="Supprimer cette personne">✕</button>' +
+    "</div>"
+  );
+}
+
+function addPersonRow() {
+  const editor = document.getElementById("people-editor");
+  if (!editor) return;
+
+  const rows = editor.querySelectorAll(".person-row");
+  if (rows.length >= 12) {
+    toast("12 personnes maximum.");
+    return;
+  }
+
+  editor.insertAdjacentHTML("beforeend", personRowHTML({ id: Store.uid("p"), name: "", tags: [] }, rows.length));
+  renumberPeople(editor);
+
+  const row = editor.lastElementChild;
+  if (row) row.querySelector('input[name="personName"]').focus();
+}
+
+function removePersonRow(element) {
+  const editor = document.getElementById("people-editor");
+  if (!editor) return;
+
+  const rows = editor.querySelectorAll(".person-row");
+  if (rows.length <= 1) {
+    toast("Gardez au moins une personne.");
+    return;
+  }
+
+  const row = element.closest(".person-row");
+  if (row) row.remove();
+  renumberPeople(editor);
+}
+
+function renumberPeople(editor) {
+  editor.querySelectorAll(".person-row").forEach((row, index) => {
+    const name = row.querySelector('input[name="personName"]');
+    const style = row.querySelector('select[name="personStyle"]');
+    const remove = row.querySelector('[data-action="remove-person"]');
+    if (name) name.setAttribute("aria-label", "Nom de la personne " + (index + 1));
+    if (style) style.setAttribute("aria-label", "Envie de la personne " + (index + 1));
+    if (remove) remove.setAttribute("aria-label", "Supprimer la personne " + (index + 1));
+  });
 }
 
 function bindSetupForm() {
@@ -297,10 +403,23 @@ function bindSetupForm() {
       return;
     }
 
+    const ids = data.getAll("personId").map((value) => String(value || ""));
+    const names = data.getAll("personName").map((value) => String(value || "").trim());
+    const styles = data.getAll("personStyle").map((value) => String(value || ""));
+
+    const profiles = names.map((name, index) => ({
+      id: ids[index] || Store.uid("p"),
+      name: name || "Personne " + (index + 1),
+      tags: TAG_BY_ID[styles[index]] ? [styles[index]] : []
+    }));
+
+    Store.setProfiles(profiles);
+
     const settings = {
       startDate: String(data.get("startDate") || todayISO()),
       days: clamp(Number(data.get("days")) || 5, 1, 14),
-      persons: clamp(Number(data.get("persons")) || 2, 1, 12),
+      persons: profiles.length,
+      profiles,
       meals,
       favor: data.getAll("favor"),
       avoid: data.getAll("avoid")
@@ -308,6 +427,7 @@ function bindSetupForm() {
 
     Generator.generate(settings, Store.state.plan);
     UI.setupOpen = false;
+    UI.menuProfile = "all";
     render();
     toast(settings.days + " jour" + (settings.days > 1 ? "s" : "") + " de menus générés 🎉");
   });
@@ -315,20 +435,27 @@ function bindSetupForm() {
 
 function planSummaryHTML(plan) {
   const settings = plan.settings;
+  const profiles = plan.profiles || [];
   const mealLabels = settings.meals.map((id) => (MEAL_BY_ID[id] ? MEAL_BY_ID[id].label : id)).join(" · ");
+  const personTags = profiles.map((profile, index) => {
+    const style = profileStyle(profile);
+    return '<span class="tag tag-person"><span class="person-dot" style="--person-color:' + profileColor(index) + '"></span>' +
+      esc(profile.name) + (style ? " · " + style.emoji + " " + esc(style.label) : "") + "</span>";
+  }).join("");
   const favor = settings.favor
     .map((id) => (TAG_BY_ID[id] ? '<span class="tag tag-favor">' + TAG_BY_ID[id].emoji + " " + TAG_BY_ID[id].label + "</span>" : ""))
     .join("");
   const avoid = settings.avoid
     .map((id) => (TAG_BY_ID[id] ? '<span class="tag tag-warn">sans ' + TAG_BY_ID[id].label.toLowerCase() + "</span>" : ""))
     .join("");
+  const menuLabel = profiles.length > 1 ? "menus personnalisés" : "menu personnalisé";
 
   return (
     '<div class="plan-summary card">' +
       "<div>" +
         '<p class="eyebrow">Critères actuels</p>' +
-        '<p class="plan-summary-text"><strong>' + settings.days + " jours</strong> · " + settings.persons + " pers. · " + esc(mealLabels) + "</p>" +
-        (favor || avoid ? '<div class="tag-list">' + favor + avoid + "</div>" : "") +
+        '<p class="plan-summary-text"><strong>' + settings.days + " jours</strong> · " + profiles.length + " " + menuLabel + " · " + esc(mealLabels) + "</p>" +
+        (personTags || favor || avoid ? '<div class="tag-list">' + personTags + favor + avoid + "</div>" : "") +
       "</div>" +
       '<button class="btn btn-ghost" type="button" data-action="toggle-setup">✏️ Modifier</button>' +
     "</div>"
@@ -345,24 +472,37 @@ function emptyPlanHTML() {
 }
 
 function planContentHTML(plan) {
-  let plannedMeals = 0;
+  let portions = 0;
   const distinct = new Set();
 
   plan.days.forEach((day) => {
     day.meals.forEach((meal) => {
-      if (Store.getRecipe(meal.recipeId)) {
-        plannedMeals += 1;
-        distinct.add(meal.recipeId);
-      }
+      (meal.variants || []).forEach((variant) => {
+        if (Store.getRecipe(variant.recipeId)) {
+          portions += 1;
+          distinct.add(variant.recipeId);
+        }
+      });
     });
   });
+
+  const filters = plan.profiles.length > 1
+    ? '<div class="profile-filter" role="group" aria-label="Afficher le menu d\'une personne">' +
+        '<button class="chip' + (UI.menuProfile === "all" ? " is-active" : "") + '" type="button" data-action="filter-profile" data-profile="all" aria-pressed="' + (UI.menuProfile === "all") + '">Tout le monde</button>' +
+        plan.profiles.map((profile, index) =>
+          '<button class="chip' + (UI.menuProfile === profile.id ? " is-active" : "") + '" type="button" data-action="filter-profile" data-profile="' + esc(profile.id) + '" aria-pressed="' + (UI.menuProfile === profile.id) + '">' +
+            '<span class="person-dot" style="--person-color:' + profileColor(index) + '"></span>' + esc(profile.name) +
+          "</button>"
+        ).join("") +
+      "</div>"
+    : "";
 
   return (
     '<div class="plan-toolbar card">' +
       '<div class="plan-stats">' +
         "<div class=\"stat\"><strong>" + plan.days.length + "</strong><span>jours</span></div>" +
-        "<div class=\"stat\"><strong>" + plannedMeals + "</strong><span>repas</span></div>" +
-        "<div class=\"stat\"><strong>" + plan.settings.persons + "</strong><span>personnes</span></div>" +
+        "<div class=\"stat\"><strong>" + portions + "</strong><span>portions</span></div>" +
+        "<div class=\"stat\"><strong>" + plan.profiles.length + "</strong><span>personnes</span></div>" +
         "<div class=\"stat\"><strong>" + distinct.size + "</strong><span>recettes</span></div>" +
       "</div>" +
       '<div class="plan-actions">' +
@@ -370,6 +510,7 @@ function planContentHTML(plan) {
         '<button class="btn btn-ghost btn-sm btn-danger" type="button" data-action="clear-plan">Vider</button>' +
       "</div>" +
     "</div>" +
+    filters +
     '<div class="days-grid">' +
       plan.days.map((day, dayIndex) => dayCardHTML(day, dayIndex, plan)).join("") +
     "</div>" +
@@ -394,33 +535,65 @@ function dayCardHTML(day, dayIndex, plan) {
 
 function mealHTML(meal, dayIndex, plan) {
   const slot = MEAL_BY_ID[meal.slot];
-  const recipe = Store.getRecipe(meal.recipeId);
   const slotLabel = '<span class="meal-slot"><span aria-hidden="true">' + slot.emoji + "</span>" + slot.short + "</span>";
+
+  const visibleProfiles = plan.profiles
+    .map((profile, index) => ({ profile, index }))
+    .filter((entry) => UI.menuProfile === "all" || entry.profile.id === UI.menuProfile);
+
+  const variants = visibleProfiles.map(({ profile, index }) => {
+    const variant = (meal.variants || []).find((entry) => entry.profileId === profile.id) || {
+      profileId: profile.id,
+      recipeId: null,
+      locked: false
+    };
+    return variantHTML(variant, slot, dayIndex, profile, index);
+  }).join("");
+
+  return (
+    '<div class="meal-group">' +
+      '<div class="meal-group-head">' + slotLabel + "</div>" +
+      '<div class="meal-variants">' + variants + "</div>" +
+    "</div>"
+  );
+}
+
+function variantHTML(variant, slot, dayIndex, profile, profileIndex) {
+  const recipe = Store.getRecipe(variant.recipeId);
+  const style = profileStyle(profile);
+  const chip = '<span class="person-chip"><span class="person-dot" style="--person-color:' + profileColor(profileIndex) + '"></span>' + esc(profile.name) + "</span>";
+  const styleHTML = style ? '<span class="variant-style">' + style.emoji + " " + esc(style.label) + "</span>" : "";
 
   if (!recipe) {
     return (
-      '<div class="meal is-empty">' +
-        slotLabel +
-        '<button class="meal-empty-btn" type="button" data-action="pick-slot" data-day="' + dayIndex + '" data-slot="' + meal.slot + '">＋ Choisir une recette</button>' +
+      '<div class="meal-variant is-empty">' +
+        '<div class="variant-head">' + chip + styleHTML + "</div>" +
+        '<button class="meal-empty-btn" type="button" data-action="pick-slot" data-day="' + dayIndex + '" data-slot="' + slot.id + '" data-profile="' + esc(profile.id) + '">＋ Choisir une recette</button>' +
       "</div>"
     );
   }
 
+  const lockLabel = variant.locked
+    ? "Désépingler " + slot.label.toLowerCase() + " de " + profile.name
+    : "Épingler " + slot.label.toLowerCase() + " de " + profile.name;
+
   return (
-    '<div class="meal' + (meal.locked ? " is-locked" : "") + '">' +
-      slotLabel +
+    '<div class="meal-variant' + (variant.locked ? " is-locked" : "") + '">' +
+      '<div class="variant-head">' +
+        chip + styleHTML +
+        '<span class="meal-buttons">' +
+          '<button class="icon-btn' + (variant.locked ? " is-on" : "") + '" type="button" data-action="lock-slot" data-day="' + dayIndex + '" data-slot="' + slot.id + '" data-profile="' + esc(profile.id) + '" aria-label="' + esc(lockLabel) + '" aria-pressed="' + variant.locked + '" title="' + (variant.locked ? "Désépingler" : "Épingler") + '">' + (variant.locked ? "🔒" : "🔓") + "</button>" +
+          '<button class="icon-btn" type="button" data-action="swap-slot" data-day="' + dayIndex + '" data-slot="' + slot.id + '" data-profile="' + esc(profile.id) + '" aria-label="Remplacer ' + esc(slot.label.toLowerCase()) + ' de ' + esc(profile.name) + '" title="Remplacer">🔁</button>' +
+          '<button class="icon-btn" type="button" data-action="remove-slot" data-day="' + dayIndex + '" data-slot="' + slot.id + '" data-profile="' + esc(profile.id) + '" aria-label="Retirer ' + esc(slot.label.toLowerCase()) + ' de ' + esc(profile.name) + '" title="Retirer">✕</button>' +
+        "</span>" +
+      "</div>" +
       '<button class="meal-recipe" type="button" data-action="view-recipe" data-id="' + esc(recipe.id) + '">' +
         '<span class="meal-emoji" aria-hidden="true">' + esc(recipe.emoji) + "</span>" +
         '<span class="meal-info">' +
           '<span class="meal-name">' + esc(recipe.name) + "</span>" +
-          '<span class="meal-meta">⏱ ' + recipe.time + " min · 👥 " + plan.settings.persons + " pers.</span>" +
+          '<span class="meal-meta">⏱ ' + recipe.time + " min · 1 portion</span>" +
         "</span>" +
       "</button>" +
-      '<span class="meal-buttons">' +
-        '<button class="icon-btn' + (meal.locked ? " is-on" : "") + '" type="button" data-action="lock-slot" data-day="' + dayIndex + '" data-slot="' + meal.slot + '" aria-label="' + (meal.locked ? "Désépingler ce repas" : "Épingler ce repas") + '" aria-pressed="' + meal.locked + '" title="' + (meal.locked ? "Désépingler" : "Épingler") + '">' + (meal.locked ? "🔒" : "🔓") + "</button>" +
-        '<button class="icon-btn" type="button" data-action="swap-slot" data-day="' + dayIndex + '" data-slot="' + meal.slot + '" aria-label="Remplacer ce repas" title="Remplacer">🔁</button>' +
-        '<button class="icon-btn" type="button" data-action="remove-slot" data-day="' + dayIndex + '" data-slot="' + meal.slot + '" aria-label="Retirer ce repas" title="Retirer">✕</button>' +
-      "</span>" +
     "</div>"
   );
 }
@@ -459,7 +632,7 @@ function renderCourses() {
 
   subtitle.textContent =
     "Pour " + data.persons + " personne" + (data.persons > 1 ? "s" : "") + " · " +
-    data.meals + " repas · " + data.items.length + " article" + (data.items.length > 1 ? "s" : "");
+    data.meals + " portions · " + data.items.length + " article" + (data.items.length > 1 ? "s" : "");
 
   const groupsHTML = data.groups.map((group) => {
     const meta = CATEGORY_META[group.cat] || CATEGORY_META.Autre;
@@ -491,7 +664,7 @@ function renderCourses() {
       "</div>" +
       '<div class="courses-summary-meta">' +
         "<span>👥 " + data.persons + " pers.</span>" +
-        "<span>🍽 " + data.meals + " repas</span>" +
+        "<span>🍽 " + data.meals + " portions</span>" +
         "<span>📖 " + data.recipeCount + " recettes</span>" +
       "</div>" +
       '<div class="courses-actions">' +
@@ -509,7 +682,7 @@ function copyShoppingList() {
   const checked = Store.state.shopping.checked;
   const lines = [
     "Popote — Liste de courses",
-    "Pour " + data.persons + " personne" + (data.persons > 1 ? "s" : "") + " · " + data.meals + " repas",
+    "Pour " + data.persons + " personne" + (data.persons > 1 ? "s" : "") + " · " + data.meals + " portions",
     ""
   ];
 
@@ -554,6 +727,7 @@ function fallbackCopy(text) {
 function handleAction(action, element) {
   const dayIndex = Number(element.dataset.day);
   const slot = element.dataset.slot;
+  const profileId = element.dataset.profile;
 
   switch (action) {
     case "new-recipe":
@@ -598,6 +772,19 @@ function handleAction(action, element) {
       renderMenus();
       break;
 
+    case "add-person":
+      addPersonRow();
+      break;
+
+    case "remove-person":
+      removePersonRow(element);
+      break;
+
+    case "filter-profile":
+      UI.menuProfile = element.dataset.profile || "all";
+      renderMenus();
+      break;
+
     case "goto-courses":
       switchView("courses");
       break;
@@ -632,12 +819,13 @@ function handleAction(action, element) {
     case "clear-plan":
       if (!confirm("Vider tout le planning et la liste de courses ?")) return;
       Store.clearPlan();
+      UI.menuProfile = "all";
       render();
       toast("Planning vidé.");
       break;
 
     case "swap-slot":
-      if (Generator.swap(dayIndex, slot)) {
+      if (Generator.swap(dayIndex, slot, profileId)) {
         render();
         toast("Repas remplacé.");
       } else {
@@ -646,23 +834,23 @@ function handleAction(action, element) {
       break;
 
     case "lock-slot": {
-      const locked = Generator.toggleLock(dayIndex, slot);
+      const locked = Generator.toggleLock(dayIndex, slot, profileId);
       render();
       toast(locked ? "Repas épinglé 🔒" : "Repas libéré 🔓");
       break;
     }
 
     case "remove-slot":
-      Generator.remove(dayIndex, slot);
+      Generator.remove(dayIndex, slot, profileId);
       render();
       break;
 
     case "pick-slot":
-      openRecipePicker(dayIndex, slot);
+      openRecipePicker(dayIndex, slot, profileId);
       break;
 
     case "assign-slot":
-      Generator.assign(dayIndex, slot, element.dataset.id);
+      Generator.assign(dayIndex, slot, element.dataset.id, profileId);
       closeModal();
       render();
       toast("Repas ajouté.");
@@ -1019,7 +1207,7 @@ function openRecipeEditor(id) {
 
 /* ---------- Choix manuel d'une recette ---------- */
 
-function openRecipePicker(dayIndex, slot) {
+function openRecipePicker(dayIndex, slot, profileId) {
   const slotMeta = MEAL_BY_ID[slot];
   if (!slotMeta) return;
 
@@ -1028,14 +1216,22 @@ function openRecipePicker(dayIndex, slot) {
     .sort((a, b) => (Number(b.favorite) - Number(a.favorite)) || a.name.localeCompare(b.name, "fr"));
 
   const plan = Store.state.plan;
-  const currentId = plan && plan.days[dayIndex]
-    ? (plan.days[dayIndex].meals.find((meal) => meal.slot === slot) || {}).recipeId
+  const profile = plan && Array.isArray(plan.profiles)
+    ? plan.profiles.find((item) => item.id === profileId)
     : null;
+  const meal = plan && plan.days[dayIndex]
+    ? plan.days[dayIndex].meals.find((entry) => entry.slot === slot)
+    : null;
+  const variant = meal && Array.isArray(meal.variants)
+    ? meal.variants.find((entry) => entry.profileId === profileId)
+    : null;
+  const currentId = variant ? variant.recipeId : null;
+  const style = profileStyle(profile);
 
   const rows = pool.map((recipe) => {
     const isCurrent = recipe.id === currentId;
     return (
-      '<button type="button" class="picker-row' + (isCurrent ? " is-current" : "") + '" data-action="assign-slot" data-day="' + dayIndex + '" data-slot="' + slot + '" data-id="' + esc(recipe.id) + '">' +
+      '<button type="button" class="picker-row' + (isCurrent ? " is-current" : "") + '" data-action="assign-slot" data-day="' + dayIndex + '" data-slot="' + slot + '" data-profile="' + esc(profileId || "") + '" data-id="' + esc(recipe.id) + '">' +
         '<span class="picker-emoji" aria-hidden="true">' + esc(recipe.emoji) + "</span>" +
         '<span class="picker-info">' +
           '<span class="picker-name">' + esc(recipe.name) + "</span>" +
@@ -1049,12 +1245,13 @@ function openRecipePicker(dayIndex, slot) {
   openModal(
     '<div class="modal-head">' +
       "<div>" +
-        '<p class="eyebrow">' + slotMeta.emoji + " " + slotMeta.label + "</p>" +
+        '<p class="eyebrow">' + slotMeta.emoji + " " + slotMeta.label + (profile ? " · " + esc(profile.name) : "") + "</p>" +
         "<h2>Choisir une recette</h2>" +
       "</div>" +
       '<button type="button" class="close-x" data-action="close-modal" aria-label="Fermer">✕</button>' +
     "</div>" +
     '<div class="modal-body">' +
+      (profile ? '<p class="modal-sub">Pour <strong>' + esc(profile.name) + "</strong>" + (style ? " · " + style.emoji + " " + esc(style.label) : "") + "</p>" : "") +
       (rows
         ? '<div class="picker-list">' + rows + "</div>"
         : emptyState(

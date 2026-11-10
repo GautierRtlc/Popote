@@ -10,8 +10,29 @@ const Generator = (() => {
     "snack": ["snack"]
   };
 
+  function normalizeProfiles(rawProfiles, fallbackCount) {
+    const source = Array.isArray(rawProfiles) ? rawProfiles : [];
+    const count = Math.min(12, source.length || Math.round(clamp(fallbackCount || 2, 1, 12)));
+    const profiles = [];
+
+    for (let index = 0; index < count; index += 1) {
+      const sourceProfile = source[index] || {};
+      const name = String(sourceProfile.name || "").trim().slice(0, 24);
+      profiles.push({
+        id: sourceProfile.id || Store.uid("p"),
+        name: name || "Personne " + (index + 1),
+        tags: Array.isArray(sourceProfile.tags)
+          ? sourceProfile.tags.filter((tag) => TAG_BY_ID[tag])
+          : []
+      });
+    }
+
+    return profiles;
+  }
+
   function normalizeSettings(settings) {
     const source = settings || {};
+    const profiles = normalizeProfiles(source.profiles, source.persons);
     const meals = Array.isArray(source.meals) && source.meals.length
       ? MEAL_SLOTS.map((slot) => slot.id).filter((id) => source.meals.includes(id))
       : ["dejeuner", "diner"];
@@ -19,7 +40,8 @@ const Generator = (() => {
     return {
       startDate: /^\d{4}-\d{2}-\d{2}$/.test(source.startDate || "") ? source.startDate : todayISO(),
       days: Math.round(clamp(source.days || 5, 1, 14)),
-      persons: Math.round(clamp(source.persons || 2, 1, 12)),
+      persons: profiles.length,
+      profiles,
       meals,
       favor: Array.isArray(source.favor) ? source.favor.filter((tag) => TAG_BY_ID[tag]) : [],
       avoid: Array.isArray(source.avoid) ? source.avoid.filter((tag) => TAG_BY_ID[tag]) : []
@@ -33,7 +55,7 @@ const Generator = (() => {
     return source.filter((recipe) => types.includes(recipe.type));
   }
 
-  function choose(slot, settings, recipes, usage, lastUsed, dayIndex, excludeIds) {
+  function choose(slot, settings, recipes, usage, lastUsed, dayIndex, excludeIds, personTags) {
     const excluded = new Set(excludeIds || []);
     let pool = poolFor(slot, recipes).filter((recipe) => !excluded.has(recipe.id));
     if (!pool.length) return null;
@@ -41,9 +63,19 @@ const Generator = (() => {
     const withoutAvoided = pool.filter((recipe) => !recipe.tags.some((tag) => settings.avoid.includes(tag)));
     if (withoutAvoided.length) pool = withoutAvoided;
 
+    // Le style d'une personne est prioritaire : on restreint le choix aux
+    // recettes qui correspondent, avec repli sur le pool complet si besoin.
+    const personalTags = Array.isArray(personTags) ? personTags : [];
+    if (personalTags.length) {
+      const matching = pool.filter((recipe) => recipe.tags.some((tag) => personalTags.includes(tag)));
+      if (matching.length) pool = matching;
+    }
+
+    const likedTags = Array.from(new Set((settings.favor || []).concat(personalTags)));
+
     const scored = pool.map((recipe) => {
       let score = Math.random() * 2.2;
-      score += recipe.tags.filter((tag) => settings.favor.includes(tag)).length * 3;
+      score += recipe.tags.filter((tag) => likedTags.includes(tag)).length * 3;
       if (recipe.favorite) score += 1.1;
       score -= (usage[recipe.id] || 0) * 5;
       if (lastUsed[recipe.id] != null && dayIndex - lastUsed[recipe.id] <= 2) score -= 4.5;
@@ -55,17 +87,27 @@ const Generator = (() => {
     return top[Math.floor(Math.random() * top.length)].recipe;
   }
 
+  function trackRecipe(usage, lastUsed, recipeId, dayIndex) {
+    if (!recipeId) return;
+    usage[recipeId] = (usage[recipeId] || 0) + 1;
+    lastUsed[recipeId] = dayIndex;
+  }
+
   /**
-   * Construit un planning complet.
+   * Construit un planning complet, avec un menu par personne.
    * Les repas épinglés (locked) du planning précédent sont conservés
-   * s'ils correspondent à la même date et au même créneau.
+   * s'ils correspondent à la même date, au même créneau et à la même personne.
    */
   function generate(rawSettings, previousPlan, options) {
     const settings = normalizeSettings(rawSettings);
     const opts = options || {};
     const recipes = Store.recipes;
-    const usage = {};
-    const lastUsed = {};
+    const profileStates = {};
+
+    settings.profiles.forEach((profile) => {
+      profileStates[profile.id] = { usage: {}, lastUsed: {} };
+    });
+
     const days = [];
 
     for (let dayIndex = 0; dayIndex < settings.days; dayIndex += 1) {
@@ -78,31 +120,63 @@ const Generator = (() => {
         const previousMeal = previousDay
           ? previousDay.meals.find((meal) => meal.slot === slot)
           : null;
+        const usedThisSlot = new Set();
 
-        if (previousMeal && previousMeal.locked && Store.getRecipe(previousMeal.recipeId)) {
-          usage[previousMeal.recipeId] = (usage[previousMeal.recipeId] || 0) + 1;
-          lastUsed[previousMeal.recipeId] = dayIndex;
-          return { slot, recipeId: previousMeal.recipeId, locked: true };
-        }
+        const variants = settings.profiles.map((profile) => {
+          const profileState = profileStates[profile.id];
+          const previousVariant = previousMeal && Array.isArray(previousMeal.variants)
+            ? previousMeal.variants.find((variant) => variant.profileId === profile.id)
+            : null;
+          const lockedRecipe = previousVariant && previousVariant.locked
+            ? Store.getRecipe(previousVariant.recipeId)
+            : null;
 
-        const exclude = opts.excludeCurrent && previousMeal && previousMeal.recipeId
-          ? [previousMeal.recipeId]
-          : [];
+          if (lockedRecipe) {
+            usedThisSlot.add(lockedRecipe.id);
+            trackRecipe(profileState.usage, profileState.lastUsed, lockedRecipe.id, dayIndex);
+            return { profileId: profile.id, recipeId: lockedRecipe.id, locked: true };
+          }
 
-        const recipe = choose(slot, settings, recipes, usage, lastUsed, dayIndex, exclude);
+          const exclude = Array.from(usedThisSlot);
+          if (opts.excludeCurrent && previousVariant && previousVariant.recipeId) {
+            exclude.push(previousVariant.recipeId);
+          }
 
-        if (recipe) {
-          usage[recipe.id] = (usage[recipe.id] || 0) + 1;
-          lastUsed[recipe.id] = dayIndex;
-        }
+          const recipe = choose(
+            slot,
+            settings,
+            recipes,
+            profileState.usage,
+            profileState.lastUsed,
+            dayIndex,
+            exclude,
+            profile.tags
+          );
 
-        return { slot, recipeId: recipe ? recipe.id : null, locked: false };
+          if (recipe) {
+            usedThisSlot.add(recipe.id);
+            trackRecipe(profileState.usage, profileState.lastUsed, recipe.id, dayIndex);
+          }
+
+          return { profileId: profile.id, recipeId: recipe ? recipe.id : null, locked: false };
+        });
+
+        return { slot, variants };
       });
 
       days.push({ date, meals });
     }
 
-    const plan = { startDate: settings.startDate, days, settings };
+    const storedSettings = { ...settings };
+    delete storedSettings.profiles;
+
+    const plan = {
+      startDate: settings.startDate,
+      profiles: settings.profiles,
+      days,
+      settings: storedSettings
+    };
+
     Store.setPlan(plan);
     return plan;
   }
@@ -110,7 +184,8 @@ const Generator = (() => {
   function regenerate() {
     const plan = Store.state.plan;
     if (!plan) return null;
-    return generate(plan.settings, plan, { excludeCurrent: true });
+    const settings = { ...plan.settings, profiles: plan.profiles };
+    return generate(settings, plan, { excludeCurrent: true });
   }
 
   function findMeal(dayIndex, slot) {
@@ -119,59 +194,94 @@ const Generator = (() => {
     return plan.days[dayIndex].meals.find((meal) => meal.slot === slot) || null;
   }
 
-  function swap(dayIndex, slot) {
+  function findVariant(dayIndex, slot, profileId) {
+    const meal = findMeal(dayIndex, slot);
+    if (!meal || !Array.isArray(meal.variants)) return null;
+    return meal.variants.find((variant) => variant.profileId === profileId) || null;
+  }
+
+  function swap(dayIndex, slot, profileId) {
     const plan = Store.state.plan;
     const meal = findMeal(dayIndex, slot);
-    if (!plan || !meal) return false;
+    const variant = findVariant(dayIndex, slot, profileId);
+    if (!plan || !meal || !variant) return false;
 
+    const profile = plan.profiles.find((item) => item.id === profileId);
     const usage = {};
     const lastUsed = {};
-    const used = new Set();
 
     plan.days.forEach((day, index) => {
       day.meals.forEach((item) => {
-        if (!item.recipeId) return;
-        used.add(item.recipeId);
-        usage[item.recipeId] = (usage[item.recipeId] || 0) + 1;
-        lastUsed[item.recipeId] = index;
+        (item.variants || []).forEach((entry) => {
+          if (entry.profileId === profileId && entry.recipeId) {
+            trackRecipe(usage, lastUsed, entry.recipeId, index);
+          }
+        });
       });
     });
 
-    // On privilégie une recette encore absente du planning, en respectant
-    // les envies et exclusions. Si tout a déjà été utilisé, on relâche
-    // simplement la contrainte d'unicité.
-    let next = choose(slot, plan.settings, Store.recipes, usage, lastUsed, dayIndex, Array.from(used));
-    if (!next) next = choose(slot, plan.settings, Store.recipes, {}, {}, dayIndex, [meal.recipeId]);
+    // On évite de servir le même plat à plusieurs convives sur le même créneau.
+    const usedToday = new Set(
+      meal.variants
+        .filter((entry) => entry.profileId !== profileId && entry.recipeId)
+        .map((entry) => entry.recipeId)
+    );
+    const exclude = Array.from(usedToday);
+    if (variant.recipeId) exclude.push(variant.recipeId);
+
+    let next = choose(
+      slot,
+      plan.settings,
+      Store.recipes,
+      usage,
+      lastUsed,
+      dayIndex,
+      exclude,
+      profile ? profile.tags : []
+    );
+
+    if (!next) {
+      next = choose(
+        slot,
+        plan.settings,
+        Store.recipes,
+        {},
+        {},
+        dayIndex,
+        variant.recipeId ? [variant.recipeId] : [],
+        profile ? profile.tags : []
+      );
+    }
     if (!next) return false;
 
-    meal.recipeId = next.id;
-    meal.locked = false;
+    variant.recipeId = next.id;
+    variant.locked = false;
     Store.save();
     return true;
   }
 
-  function assign(dayIndex, slot, recipeId) {
-    const meal = findMeal(dayIndex, slot);
-    if (!meal || !Store.getRecipe(recipeId)) return false;
-    meal.recipeId = recipeId;
-    meal.locked = false;
+  function assign(dayIndex, slot, recipeId, profileId) {
+    const variant = findVariant(dayIndex, slot, profileId);
+    if (!variant || !Store.getRecipe(recipeId)) return false;
+    variant.recipeId = recipeId;
+    variant.locked = false;
     Store.save();
     return true;
   }
 
-  function toggleLock(dayIndex, slot) {
-    const meal = findMeal(dayIndex, slot);
-    if (!meal || !meal.recipeId) return false;
-    meal.locked = !meal.locked;
+  function toggleLock(dayIndex, slot, profileId) {
+    const variant = findVariant(dayIndex, slot, profileId);
+    if (!variant || !variant.recipeId) return false;
+    variant.locked = !variant.locked;
     Store.save();
-    return meal.locked;
+    return variant.locked;
   }
 
-  function remove(dayIndex, slot) {
-    const meal = findMeal(dayIndex, slot);
-    if (!meal) return false;
-    meal.recipeId = null;
-    meal.locked = false;
+  function remove(dayIndex, slot, profileId) {
+    const variant = findVariant(dayIndex, slot, profileId);
+    if (!variant) return false;
+    variant.recipeId = null;
+    variant.locked = false;
     Store.save();
     return true;
   }
@@ -198,39 +308,53 @@ const Generator = (() => {
     const empty = { items: [], groups: [], persons: 0, days: 0, meals: 0, recipeCount: 0 };
     if (!plan) return empty;
 
-    const persons = plan.settings.persons;
+    const persons = Array.isArray(plan.profiles) && plan.profiles.length
+      ? plan.profiles.length
+      : (plan.settings.persons || 1);
     const map = new Map();
     const recipeIds = new Set();
-    let meals = 0;
+    let portions = 0;
 
     plan.days.forEach((day) => {
       day.meals.forEach((meal) => {
-        const recipe = Store.getRecipe(meal.recipeId);
-        if (!recipe) return;
+        const shared = !Array.isArray(meal.variants);
+        const variants = shared
+          ? [{ profileId: null, recipeId: meal.recipeId, locked: meal.locked }]
+          : meal.variants;
 
-        meals += 1;
-        recipeIds.add(recipe.id);
-        const factor = persons / (recipe.servings || 1);
+        variants.forEach((variant) => {
+          const recipe = Store.getRecipe(variant.recipeId);
+          if (!recipe) return;
 
-        recipe.ingredients.forEach((ingredient) => {
-          const unit = baseUnit(ingredient.unit);
-          const qty = toBaseQty(ingredient.unit, ingredient.qty == null ? null : ingredient.qty * factor);
-          const key = ingredient.cat + "|" + ingredient.name.toLowerCase().trim() + "|" + unit;
+          portions += 1;
+          recipeIds.add(recipe.id);
 
-          if (!map.has(key)) {
-            map.set(key, {
-              key,
-              cat: ingredient.cat,
-              name: ingredient.name,
-              unit,
-              qty: 0,
-              loose: false
-            });
-          }
+          // Chaque variante correspond à une personne. Un ancien repas
+          // partagé est converti en portions pour tout le monde.
+          const factor = shared
+            ? persons / (recipe.servings || 1)
+            : 1 / (recipe.servings || 1);
 
-          const item = map.get(key);
-          if (qty == null) item.loose = true;
-          else item.qty += qty;
+          recipe.ingredients.forEach((ingredient) => {
+            const unit = baseUnit(ingredient.unit);
+            const qty = toBaseQty(ingredient.unit, ingredient.qty == null ? null : ingredient.qty * factor);
+            const key = ingredient.cat + "|" + ingredient.name.toLowerCase().trim() + "|" + unit;
+
+            if (!map.has(key)) {
+              map.set(key, {
+                key,
+                cat: ingredient.cat,
+                name: ingredient.name,
+                unit,
+                qty: 0,
+                loose: false
+              });
+            }
+
+            const item = map.get(key);
+            if (qty == null) item.loose = true;
+            else item.qty += qty;
+          });
         });
       });
     });
@@ -265,7 +389,7 @@ const Generator = (() => {
       groups,
       persons,
       days: plan.days.length,
-      meals,
+      meals: portions,
       recipeCount: recipeIds.size
     };
   }
